@@ -1,0 +1,200 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  STUDENT
+  ADMIN
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+enum BudgetPeriod {
+  MONTHLY
+  WEEKLY
+  YEARLY
+}
+
+enum NewsSource {
+  RSS
+  API
+  MANUAL
+}
+
+enum AnalysisType {
+  MONTHLY_SUMMARY
+  SPENDING_PREDICTION
+  HEALTH_SCORE
+  CATEGORY_BREAKDOWN
+  NEWS_SENTIMENT
+}
+
+model User {
+  id           Int       @id @default(autoincrement())
+  email        String    @unique
+  name         String?
+  passwordHash String?   // düz şifre ASLA yok
+  role         UserRole  @default(STUDENT)
+  isActive     Boolean   @default(true)
+
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  lastLoginAt  DateTime?
+
+  // relations
+  incomes      Income[]
+  expenses     Expense[]
+  budgets      Budget[]
+  targets      Target[]
+  analyses     Analysis[]
+
+  @@index([email])
+}
+
+model Category {
+  id        Int      @id @default(autoincrement())
+  name      String
+  icon      String?
+  color     String?
+  isDefault Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // relations
+  expenses  Expense[]
+  budgets   Budget[]
+
+  // Aynı kategori adı her kullanıcı için tekrar edebilsin istiyorsanız userId ekleyebiliriz.
+  // Şimdilik global kategori gibi düşündüm.
+  @@unique([name])
+}
+
+model Income {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  amount    Decimal  @db.Decimal(12, 2)
+  source    String?
+  date      DateTime
+  note      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+}
+
+model Expense {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  categoryId   Int?
+  amount       Decimal  @db.Decimal(12, 2)
+  description  String?
+  merchant     String?
+  date         DateTime
+
+  // ekstre/otomatik algılama için opsiyonel alanlar
+  isRecurring  Boolean  @default(false)
+  confidence   Float?   // AI kategori tahmin güveni (0-1)
+  rawText      String?  // ekstre satırı gibi ham metin
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category     Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@index([userId, date])
+  @@index([categoryId])
+}
+
+model Budget {
+  id          Int          @id @default(autoincrement())
+  userId      Int
+  categoryId  Int?
+  period      BudgetPeriod @default(MONTHLY)
+
+  // ör: 2025-12-01 gibi ayın başlangıcı
+  periodStart DateTime
+  periodEnd   DateTime
+
+  limitAmount Decimal      @db.Decimal(12, 2)
+  alertPct    Int          @default(80) // %80’de uyar gibi
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category    Category?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@index([userId, periodStart])
+  @@index([categoryId])
+  // Aynı dönem + aynı kategori için tekrar budget açılmasın:
+  @@unique([userId, categoryId, period, periodStart])
+}
+
+model Target {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  title         String
+  description   String?
+  targetAmount  Decimal  @db.Decimal(12, 2)
+  currentAmount Decimal  @db.Decimal(12, 2) @default(0.00)
+  dueDate       DateTime?
+  isActive      Boolean  @default(true)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isActive])
+}
+
+model News {
+  id          Int        @id @default(autoincrement())
+  title       String
+  summary     String?
+  url         String?    @unique
+  source      NewsSource @default(API)
+  publishedAt DateTime?
+  fetchedAt   DateTime   @default(now())
+
+  // haber analizi için alanlar (opsiyonel)
+  sentiment   Float?     // -1 .. +1 gibi
+  tickers     String?    // "BIST:THYAO, BIST:ASELS" gibi (ileride ayrı tabloya da alınabilir)
+
+  @@index([publishedAt])
+}
+
+model Analysis {
+  id          Int          @id @default(autoincrement())
+  userId      Int
+  type        AnalysisType
+  periodStart DateTime?
+  periodEnd   DateTime?
+
+  // esnek çıktı saklama (grafik verileri / skorlar / tahminler)
+  resultJson  Json
+
+  // Haber analiziyle ilişkili olabilsin (opsiyonel)
+  newsId      Int?
+
+  createdAt   DateTime     @default(now())
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  news        News?        @relation(fields: [newsId], references: [id], onDelete: SetNull)
+
+  @@index([userId, type, createdAt])
+  @@index([newsId])
+}
